@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Notes Summarizer — Student App</title>
+<style>
+  :root{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;line-height:1.4}
+  body{display:flex;justify-content:center;padding:18px;background:#f7f7fb}
+  .card{width:100%;max-width:900px;background:#fff;padding:16px;border-radius:12px;box-shadow:0 6px 18px rgba(20,20,40,0.06)}
+  h1{font-size:18px;margin:0 0 8px}
+  textarea{width:100%;min-height:180px;padding:10px;border-radius:8px;border:1px solid #ddd;resize:vertical}
+  .controls{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  input[type=number]{width:80px;padding:8px;border-radius:8px;border:1px solid #ddd}
+  button{padding:8px 12px;border-radius:8px;border:0;background:#2b7cff;color:white;cursor:pointer}
+  button.secondary{background:#e9eefc;color:#1a3b7a}
+  .output{margin-top:12px;padding:12px;border-radius:8px;background:#fbfdff;border:1px solid #eef5ff;white-space:pre-wrap}
+  .small{font-size:13px;color:#666;margin-top:6px}
+  mark{background:#fff3b0}
+  @media(max-width:560px){textarea{min-height:220px}}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Automatic Notes Summarizer (student)</h1>
+    <div class="small">Paste your lecture or notes below, then press <strong>Summarize</strong>.</div>
+    <textarea id="textIn" placeholder="Paste notes here..."></textarea>
+
+    <div class="controls">
+      <label>Sentences:
+        <input id="numSent" type="number" min="1" value="3" />
+      </label>
+      <button id="summBtn">Summarize</button>
+      <button class="secondary" id="highlightBtn">Highlight in original</button>
+      <button class="secondary" id="copyBtn">Copy summary</button>
+      <button class="secondary" id="downloadBtn">Download .txt</button>
+    </div>
+
+    <div class="small">Summary:</div>
+    <div id="summary" class="output"></div>
+
+    <div class="small">Original text (selected sentences highlighted):</div>
+    <div id="original" class="output"></div>
+  </div>
+
+<script>
+/* ---------- core summarizer (client-side) ---------- */
+const STOPWORDS = new Set(
+  ("a an the and or is are was were in on at to of for with that this it as by be from which we you they i he she his her but not their them have has had will can may would should our your me my mine " +
+  "so if else than then because about into through during before after above below up down out over under again further once here there when where why how").split(/\s+/));
+
+function splitSentences(text){
+  // returns array of sentences (keeps punctuation)
+  const matches = text.match(/[^.!?]+[.!?]*/g);
+  return matches ? matches.map(s => s.trim()).filter(s => s.length>0) : [];
+}
+
+function tokenize(text){
+  return (text.toLowerCase().match(/\b[a-z0-9]+\b/g) || []).filter(w => !STOPWORDS.has(w));
+}
+
+function buildFreq(tokens){
+  const freq = Object.create(null);
+  tokens.forEach(w => freq[w] = (freq[w] || 0) + 1);
+  return freq;
+}
+
+function scoreSentences(sentences, freq){
+  return sentences.map((s, idx) => {
+    const words = (s.toLowerCase().match(/\b[a-z0-9]+\b/g) || []);
+    let score=0;
+    words.forEach(w => { if(freq[w]) score += freq[w]; });
+    return { idx, s, score };
+  });
+}
+
+function summarize(text, numSentences){
+  const sentences = splitSentences(text);
+  if(sentences.length <= numSentences) return {summary: sentences.join(" "), selected: sentences.map((s,i)=>i)};
+
+  const tokens = tokenize(text);
+  const freq = buildFreq(tokens);
+  const scored = scoreSentences(sentences, freq);
+  // pick top N by score
+  const top = scored.slice().sort((a,b)=>b.score - a.score).slice(0, Math.min(numSentences, scored.length));
+  // preserve original order
+  const topSorted = top.sort((a,b)=>a.idx - b.idx);
+  const summary = topSorted.map(x => x.s).join(" ");
+  const selected = topSorted.map(x => x.idx);
+  return {summary, selected};
+}
+
+/* ---------- UI handlers ---------- */
+const textIn = document.getElementById('textIn');
+const numSent = document.getElementById('numSent');
+const summBtn = document.getElementById('summBtn');
+const summaryDiv = document.getElementById('summary');
+const originalDiv = document.getElementById('original');
+const copyBtn = document.getElementById('copyBtn');
+const downloadBtn = document.getElementById('downloadBtn');
+const highlightBtn = document.getElementById('highlightBtn');
+
+function renderOriginalWithHighlights(text, selectedIndices){
+  const sentences = splitSentences(text);
+  if(sentences.length===0) return "";
+  return sentences.map((s,i) => selectedIndices.includes(i) ? `<mark>${escapeHtml(s)}</mark>` : escapeHtml(s)).join(" ");
+}
+
+function escapeHtml(str){
+  return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+summBtn.addEventListener('click', ()=>{
+  const txt = textIn.value.trim();
+  if(!txt){ summaryDiv.textContent = "Paste your notes first."; originalDiv.textContent = ""; return; }
+  let n = parseInt(numSent.value) || 3;
+  const {summary, selected} = summarize(txt, n);
+  summaryDiv.textContent = summary;
+  originalDiv.innerHTML = renderOriginalWithHighlights(txt, selected);
+});
+
+highlightBtn.addEventListener('click', ()=> {
+  const txt = textIn.value.trim();
+  if(!txt){ originalDiv.textContent = "Paste notes first."; return; }
+  let n = parseInt(numSent.value) || 3;
+  const {selected} = summarize(txt, n);
+  originalDiv.innerHTML = renderOriginalWithHighlights(txt, selected);
+});
+
+copyBtn.addEventListener('click', ()=>{
+  const s = summaryDiv.textContent || "";
+  if(!s) return alert("No summary to copy.");
+  navigator.clipboard?.writeText(s).then(()=> alert("Summary copied to clipboard"), ()=> alert("Copy failed"));
+});
+
+downloadBtn.addEventListener('click', ()=>{
+  const s = summaryDiv.textContent || "";
+  if(!s) return alert("No summary to download.");
+  const blob = new Blob([s], {type:"text/plain;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = "summary.txt";
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+});
+</script>
+</body>
+</html>
